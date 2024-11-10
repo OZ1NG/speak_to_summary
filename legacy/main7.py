@@ -4,13 +4,19 @@ import sys
 import json
 from pydub import AudioSegment
 from openai import OpenAI
+from langchain.chat_models import ChatOpenAI
+from langchain.chains.summarize import load_summarize_chain
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.docstore.document import Document
+
 
 # OpenAI API 키 설정
 api_key = os.environ.get('OPENAI_API_KEY')
-if api_key == None:
+if api_key is None:
     print(f"[!] Please set OPENAI_API_KEY as an environment variable.")
     exit(0)
 client = OpenAI(api_key=api_key)
+llm = ChatOpenAI(model_name="gpt-4o", temperature=0)
 
 # 파일을 23MB씩 나누고, 1MB context window 추가
 def split_audio(file_path, segment_size_mb=23, overlap_size_mb=1):
@@ -75,38 +81,16 @@ def extract_categories_and_keywords(transcripts):
     )
     return response.choices[0].message.content.strip()
 
-def summarize_text(text, previous_summary=None, categories_keywords=None):
-    system_prompt = (
-        "너는 최고의 내용 요약 정리 전문가야. "
-        "너는 최고의 내용 요약 정리 전문가로써 다음의 작업 내용 대로 항상 일을 진행해.\n\n작업1. 정리할 소주제를 생각한다.\n작업2. 소주제에서 다루는 문제점과 해결 방법을 키워드와 기술적인 관점에서 자세하고 정확히 파악한다.\n작업3. 문제점과 해결 방법이 설명된 문구를 인용구의 형식으로 남기면서 이전의 요약 내용에 추가 종합 정리한다.\n\n"
-        "작업의 결과는 <workflow></workflow> 태그안에서 정리해줘. "
-        "요약 정리 결과는 <res></res> 태그 안에서 마크다운 형태로 정리하며 모든 소제목의 내용은 보안 기술적인 관점으로 발표에서 다루는 문제점과 그에 대한 해결 방법을 중점으로 두고 이해하기 쉽게 길고 자세하게 정리해줘. "
-        "요약 정리 결과는 제목, Bullet Point, 핵심 정보를 포함한 상세한 마크다운 형식으로 대답해줘. "
-        "특정 조치가 왜 이루어졌는지, 무엇이 이를 이끌었는지, 그리고 그 결과가 무엇이었는지 설명하세요. 주요 세부사항이 강조되도록 항목, 제목, 핵심 정보를 포함하고, 제공된 범주와 키워드를 고려하여 가장 중요한 정보가 부각되도록 해줘.\n"
-        # "Can you provide a comprehensive summary of the given text? The summary should cover all the key points and main ideas presented in the original text, while also condensing the information into a concise and easy-to-understand format. Please ensure that the summary includes relevant details and examples that support the main ideas, while avoiding any unnecessary information or repetition. The length of the summary should be appropriate for the length and complexity of the original text, providing a clear and accurate overview without omitting any important information. "
-    )
+def summarize_text_refine(transcripts):
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+    texts = text_splitter.split_text(transcripts)
+    docs = [Document(page_content=t) for t in texts]
     
-    if previous_summary:
-        prompt = (
-            "Refine and extend the following summary with new content added. "
-            "Categories and Keywords: \n" + categories_keywords + "\n"
-            "Previous Summary: \n" + previous_summary + "\n" +
-            "New Content(text): \n" + text + "\n\nRefined and Extended Summary:"
-        )        
-    else:
-        prompt = (
-            "Categories and Keywords: \n" + categories_keywords + "\n"
-            "Content(text): \n" + text + "\n\nDetailed Summary:"
-        )
+    # Use Langchain's load_summarize_chain for refining summary
+    summarize_chain = load_summarize_chain(llm, chain_type="refine")
+    summary = summarize_chain.run(docs)
     
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-    )
-    return response.choices[0].message.content.strip()
+    return summary
 
 def translate_to_korean(text, categories_keywords):
     system_prompt = "Translate the following text to Korean, and such that any technical terms are retained in their original form. 결과는 <res></res> 태그에 넣어 답변해줘. "
@@ -131,37 +115,32 @@ def main(file_path):
 
     # 1. 파일 쪼개기
     segments = split_audio(file_path)
-    previous_summary = None
-    all_transcripts = ""
+    all_transcripts = []
 
     for i, segment in enumerate(segments):
         print(f"Transcribing segment {i + 1}/{len(segments)}...")
         transcript = transcribe_audio_segment(segment, i, result_dir)
         print(f"Transcript {i + 1}:", transcript)
-        all_transcripts += transcript + "\n"
+        all_transcripts.append(transcript)
     
     # 2. 카테고리 및 키워드 추출
     print("Extracting categories and keywords...")
-    categories_keywords = extract_categories_and_keywords(all_transcripts)
+    categories_keywords = extract_categories_and_keywords("\n".join(all_transcripts))
     print("Categories and Keywords:", categories_keywords)
 
-    # 3. 요약 진행 및 refine
-    transcript_total = ''
-    for i, segment in enumerate(segments):
-        print(f"Summarizing segment {i + 1}...")
-        transcript_total += f"<transcript_{i}>\n" + transcribe_audio_segment(segment, i, result_dir) + f"\n</transcript_{i}>\n\n"
-        
-    previous_summary = summarize_text(transcript_total, previous_summary, categories_keywords)
-    print(f"Updated Summary {i + 1}:", previous_summary)
+    # 3. 요약 진행 및 refine (Langchain 사용)
+    print("Summarizing transcripts using refine method...")
+    refined_summary = summarize_text_refine("\n".join(all_transcripts))
+    print("Refined Summary:", refined_summary)
     
     # 최종 요약 결과 출력
     final_summary_path = os.path.join(result_dir, f'final_summary.txt')
     with open(final_summary_path, 'w') as fp:
-        fp.write(previous_summary)
+        fp.write(refined_summary)
     
     # 4. 요약 내용을 한국어로 번역
     print("Translating final summary to Korean...")
-    translated_summary = translate_to_korean(previous_summary, categories_keywords)
+    translated_summary = translate_to_korean(refined_summary, categories_keywords)
     print("Translated Summary:", translated_summary)
     translated_summary_path = os.path.join(result_dir, f'translated_summary.txt')
     with open(translated_summary_path, 'w') as fp:

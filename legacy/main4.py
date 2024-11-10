@@ -6,14 +6,14 @@ from pydub import AudioSegment
 from openai import OpenAI
 
 # OpenAI API 키 설정
-api_key = os.environ.get('OPENAI_API_KEY')
+api_key = os.environ.get('OPEN_API_KEY')
 if api_key == None:
-    print(f"[!] Please set OPENAI_API_KEY as an environment variable.")
+    print(f"[!] Please set OPEN_API_KEY as an environment variable.")
     exit(0)
 client = OpenAI(api_key=api_key)
 
-# 파일을 23MB씩 나누고, 1MB context window 추가
-def split_audio(file_path, segment_size_mb=23, overlap_size_mb=1):
+# 파일을 20MB씩 나누고, 1MB context window 추가
+def split_audio(file_path, segment_size_mb=25, overlap_size_mb=1):
     audio = AudioSegment.from_file(file_path, format="m4a")
     segment_size = segment_size_mb * 1024 * 1024  # Convert MB to bytes
     overlap_size = overlap_size_mb * 1024 * 1024  # Convert MB to bytes
@@ -37,20 +37,19 @@ def split_audio(file_path, segment_size_mb=23, overlap_size_mb=1):
 
     return segments
 
-def transcribe_audio_segment(audio_segment, segment_index, result_dir):
+def transcribe_audio_segment(audio_segment, segment_index):
     # Check if transcript already exists
-    transcript_filename = os.path.join(result_dir, f"transcript_segment_{segment_index}.json")
+    transcript_filename = f"transcript_segment_{segment_index}.json"
     if os.path.exists(transcript_filename):
         with open(transcript_filename, "r") as f:
             transcript_data = json.load(f)
             return transcript_data["text"]
     
     # If transcript doesn't exist, create it
-    temp_audio_path = os.path.join(result_dir, "temp_audio_segment.wav")
-    with open(temp_audio_path, "wb") as f:
-        audio_segment.export(f, format="wav")  # Use m4a format to minimize quality loss
+    with open("temp_audio_segment.wav", "wb") as f:
+        audio_segment.export(f, format="wav")  # Use WAV format to minimize quality loss
     
-    with open(temp_audio_path, "rb") as audio_file:
+    with open("temp_audio_segment.wav", "rb") as audio_file:
         transcript = client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
@@ -77,13 +76,11 @@ def extract_categories_and_keywords(transcripts):
 
 def summarize_text(text, previous_summary=None, categories_keywords=None):
     system_prompt = (
-        "너는 최고의 내용 요약 정리 전문가야. "
-        "너는 최고의 내용 요약 정리 전문가로써 다음의 작업 내용 대로 항상 일을 진행해.\n\n작업1. 정리할 소주제를 생각한다.\n작업2. 소주제에서 다루는 문제점과 해결 방법을 키워드와 기술적인 관점에서 자세하고 정확히 파악한다.\n작업3. 문제점과 해결 방법이 설명된 문구를 인용구의 형식으로 남기면서 이전의 요약 내용에 추가 종합 정리한다.\n\n"
-        "작업의 결과는 <workflow></workflow> 태그안에서 정리해줘. "
-        "요약 정리 결과는 <res></res> 태그 안에서 마크다운 형태로 정리하며 모든 소제목의 내용은 보안 기술적인 관점으로 발표에서 다루는 문제점과 그에 대한 해결 방법을 중점으로 두고 이해하기 쉽게 길고 자세하게 정리해줘. "
-        "요약 정리 결과는 제목, Bullet Point, 핵심 정보를 포함한 상세한 마크다운 형식으로 대답해줘. "
-        "특정 조치가 왜 이루어졌는지, 무엇이 이를 이끌었는지, 그리고 그 결과가 무엇이었는지 설명하세요. 주요 세부사항이 강조되도록 항목, 제목, 핵심 정보를 포함하고, 제공된 범주와 키워드를 고려하여 가장 중요한 정보가 부각되도록 해줘.\n"
-        # "Can you provide a comprehensive summary of the given text? The summary should cover all the key points and main ideas presented in the original text, while also condensing the information into a concise and easy-to-understand format. Please ensure that the summary includes relevant details and examples that support the main ideas, while avoiding any unnecessary information or repetition. The length of the summary should be appropriate for the length and complexity of the original text, providing a clear and accurate overview without omitting any important information. "
+        "너는 최고의 내용 요약 정리 도구야. "
+        "마크다운 형태로 정리하며 모든 소제목의 내용은 보안 기술적인 관점으로 발표에서 다루는 문제점과 그에 대한 해결 방법을 중점으로 두고 이해하기 쉽게 길고 자세하게 정리해줘. "
+        "Summarize the following text in a detailed markdown format with headings, bullet points, and key information. "
+        "Can you provide a comprehensive summary of the given text? The summary should cover all the key points and main ideas presented in the original text, while also condensing the information into a concise and easy-to-understand format. Please ensure that the summary includes relevant details and examples that support the main ideas, while avoiding any unnecessary information or repetition. The length of the summary should be appropriate for the length and complexity of the original text, providing a clear and accurate overview without omitting any important information. "
+        "Explain why certain actions were taken, what led to them, and what the results were. Include bullet points, headings, key details, and consider the provided categories and keywords to ensure the most essential information is highlighted.\n"
     )
     
     if previous_summary:
@@ -124,11 +121,6 @@ def translate_to_korean(text, categories_keywords):
     return response.choices[0].message.content.strip()
 
 def main(file_path):
-    # 결과 디렉토리 생성
-    result_dir = f"result_{os.path.basename(file_path).rsplit('.', 1)[0]}"
-    if not os.path.exists(result_dir):
-        os.makedirs(result_dir)
-
     # 1. 파일 쪼개기
     segments = split_audio(file_path)
     previous_summary = None
@@ -136,7 +128,7 @@ def main(file_path):
 
     for i, segment in enumerate(segments):
         print(f"Transcribing segment {i + 1}/{len(segments)}...")
-        transcript = transcribe_audio_segment(segment, i, result_dir)
+        transcript = transcribe_audio_segment(segment, i)
         print(f"Transcript {i + 1}:", transcript)
         all_transcripts += transcript + "\n"
     
@@ -146,27 +138,23 @@ def main(file_path):
     print("Categories and Keywords:", categories_keywords)
 
     # 3. 요약 진행 및 refine
-    transcript_total = ''
     for i, segment in enumerate(segments):
         print(f"Summarizing segment {i + 1}...")
-        transcript_total += f"<transcript_{i}>\n" + transcribe_audio_segment(segment, i, result_dir) + f"\n</transcript_{i}>\n\n"
-        
-    previous_summary = summarize_text(transcript_total, previous_summary, categories_keywords)
-    print(f"Updated Summary {i + 1}:", previous_summary)
+        transcript = transcribe_audio_segment(segment, i)
+        previous_summary = summarize_text(transcript, previous_summary, categories_keywords)
+        print(f"Updated Summary {i + 1}:", previous_summary)
     
     # 최종 요약 결과 출력
-    final_summary_path = os.path.join(result_dir, f'final_summary.txt')
-    with open(final_summary_path, 'w') as fp:
+    with open(f'final_summary_{os.path.basename(file_path).rsplit(".", 1)[0]}.txt', 'w') as fp:
         fp.write(previous_summary)
     
     # 4. 요약 내용을 한국어로 번역
     print("Translating final summary to Korean...")
     translated_summary = translate_to_korean(previous_summary, categories_keywords)
     print("Translated Summary:", translated_summary)
-    translated_summary_path = os.path.join(result_dir, f'translated_summary.txt')
-    with open(translated_summary_path, 'w') as fp:
+    with open(f'translated_summary_{os.path.basename(file_path).rsplit(".", 1)[0]}.txt', 'w') as fp:
         fp.write(translated_summary)
-    print(f'Save translated summary at {translated_summary_path}')
+    print(f'Save translated_summary_{os.path.basename(file_path).rsplit(".", 1)[0]}.txt')
     print('Done')
 
 if __name__ == "__main__":

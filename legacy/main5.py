@@ -6,9 +6,9 @@ from pydub import AudioSegment
 from openai import OpenAI
 
 # OpenAI API 키 설정
-api_key = os.environ.get('OPENAI_API_KEY')
+api_key = os.environ.get('OPEN_API_KEY')
 if api_key == None:
-    print(f"[!] Please set OPENAI_API_KEY as an environment variable.")
+    print(f"[!] Please set OPEN_API_KEY as an environment variable.")
     exit(0)
 client = OpenAI(api_key=api_key)
 
@@ -146,13 +146,11 @@ def main(file_path):
     print("Categories and Keywords:", categories_keywords)
 
     # 3. 요약 진행 및 refine
-    transcript_total = ''
     for i, segment in enumerate(segments):
         print(f"Summarizing segment {i + 1}...")
-        transcript_total += f"<transcript_{i}>\n" + transcribe_audio_segment(segment, i, result_dir) + f"\n</transcript_{i}>\n\n"
-        
-    previous_summary = summarize_text(transcript_total, previous_summary, categories_keywords)
-    print(f"Updated Summary {i + 1}:", previous_summary)
+        transcript = transcribe_audio_segment(segment, i, result_dir)
+        previous_summary = summarize_text(transcript, previous_summary, categories_keywords)
+        print(f"Updated Summary {i + 1}:", previous_summary)
     
     # 최종 요약 결과 출력
     final_summary_path = os.path.join(result_dir, f'final_summary.txt')
